@@ -1,19 +1,25 @@
+from datetime import datetime
+
 from flask import Flask
 from flaskext.mysql import MySQL
 from flask import request
 from flask_bcrypt import Bcrypt
 from flask import jsonify
+from flask_socketio import SocketIO
+from flask import render_template
+from flask_socketio import emit
 
 app = Flask(__name__)
 mysql = MySQL()
 bcrypt = Bcrypt(app)
 app.config['MYSQL_DATABASE_USER'] = 'root'
-app.config['MYSQL_DATABASE_PASSWORD'] = 'root'
+app.config['MYSQL_DATABASE_PASSWORD'] = 'Zlh19980901.'
 app.config['MYSQL_DATABASE_DB'] = 'skillshare'
 app.config['MYSQL_DATABASE_HOST'] = 'localhost'
 mysql.init_app(app)
 conn = mysql.connect()
 cursor =conn.cursor()
+socketio = SocketIO()
 
 
 @app.route('/')
@@ -28,7 +34,7 @@ def generate_password_hash(password):
     return pw_hash
 
 def check_if_email_exists(email,role):
-    if role:         
+    if role:
         cursor.execute('SELECT COUNT(*) FROM student WHERE email = %s', (email))
         count = cursor.fetchone()[0]
     else:
@@ -83,7 +89,7 @@ def validate_login(email, password,role):
             'name': user[1],
             'email': user[3],
         }
-    else: 
+    else:
          return {
             'teacher_id': user[0],
             'name': user[1],
@@ -106,13 +112,13 @@ def signup_student():
 
 def get_categories():
     # Connect to the database
-   
+
     # Execute query to retrieve all categories
     cursor.execute('SELECT * FROM category')
     categories = cursor.fetchall()
 
     # Close the database connection
-   
+
     # Convert database records to Python objects
     category_list = []
     if categories:
@@ -239,7 +245,7 @@ def enroll_student_in_course(student_id, course_id):
 
 def is_in_wishlist(student_id, course_id):
     # Connect to the database
-    
+
     # Check if item exists in wishlist
     cursor.execute('SELECT COUNT(*) FROM wishlist WHERE sid = %s AND cid = %s', (student_id, course_id))
     in_wishlist = cursor.fetchone()[0] > 0
@@ -250,7 +256,7 @@ def is_in_wishlist(student_id, course_id):
 
 def remove_from_wishlist_item(student_id, course_id):
     # Connect to the database
-    
+
     # Remove item from wishlist
     cursor.execute('DELETE FROM wishlist WHERE sid = %s AND cid = %s', (student_id, course_id))
 
@@ -258,15 +264,15 @@ def remove_from_wishlist_item(student_id, course_id):
 
 def is_in_cart(student_id, course_id):
     # Connect to the database
-    
-    
+
+
 
     # Check if item exists in cart
     cursor.execute('SELECT COUNT(*) FROM cart WHERE sid = %s AND cid = %s', (student_id, course_id))
     in_cart = cursor.fetchone()[0] > 0
 
     # Close the database connection
-    
+
 
     return in_cart
 
@@ -276,10 +282,10 @@ def add_to_cart_item(student_id, course_id):
 
     # Add item to cart
     cursor.execute('INSERT INTO cart (sid, cid) VALUES (%s, %s)', (student_id, course_id))
-    
+
 
     # Close the database connection
-    
+
 
 
 @app.route('/user/login', methods=['POST'])
@@ -300,7 +306,7 @@ def get_all_categories():
     # Fetch all categories from the database
     categories = get_categories()
 
-    return jsonify({'categories': categories})   
+    return jsonify({'categories': categories})
 
 @app.route('/categories/<category_id>/subcategories', methods=['GET'])
 def get_subcategories_by_category(category_id):
@@ -454,7 +460,7 @@ def add_to_wishlist():
 
     # Add item to wishlist
     cursor.execute('INSERT INTO cart (sid, cid) VALUES (%s, %s)', (student_id, course_id))
-    
+
 
     return jsonify({'message': 'Item added to wishlist'})
 
@@ -537,5 +543,113 @@ def get_past_enrollments(student_id):
 
     return jsonify({'past_enrollments': past_enrollment_list})
 
+
+@app.route("/chat")
+def chat():
+    return render_template("chat.html")
+
+
+users = {}
+receiver_global = ""
+
+
+@socketio.on("connect")
+def handle_connect():
+    print("Client connected!")
+
+
+@socketio.on("user_join")
+def handle_user_join(username):
+    print(f"User {username} joined!")
+    users[username] = request.sid
+
+    cursor.execute('SELECT distinct receiver FROM chat WHERE sender = %s', username)
+    person_list = cursor.fetchall()
+
+    print("Here is the list of person that you chatted before")
+    print(person_list)
+
+    global receiver_global
+    receiver = input("Enter a person to start chatting: ")
+    receiver_global = receiver
+
+    cursor.execute('SELECT * FROM student WHERE email = %s', username)
+    result = cursor.fetchone()
+    if result:
+        student_id = result[0]
+    else:
+        cursor.execute('SELECT * FROM teacher WHERE email = %s', username)
+        teacher_id = cursor.fetchone()[0]
+
+    cursor.execute('SELECT * FROM teacher WHERE email = %s', receiver_global)
+    result = cursor.fetchone()
+    if result:
+        teacher_id = result[0]
+    else:
+        cursor.execute('SELECT * FROM student WHERE email = %s', receiver_global)
+        student_id = cursor.fetchone()[0]
+
+    query = "SELECT * FROM chat WHERE student_id = %s AND teacher_id = %s"
+    cursor.execute(query, (student_id, teacher_id))
+    user_chatted_before = cursor.fetchall()
+
+    if user_chatted_before:
+        chat_history = get_chat_history(student_id, teacher_id)
+        for message in chat_history:
+            emit("chat", {"message": message['content'], "username": message['sender']}, room=request.sid)
+
+
+def get_chat_history(student_id, teacher_id):
+    # Retrieve chat history for the connected user from the database
+    query = "SELECT * FROM chat WHERE student_id = %s AND teacher_id = %s"
+    cursor.execute(query, (student_id, teacher_id))
+    chat_history = cursor.fetchall()
+
+    # Convert chat history to a list of dictionaries
+    history_list = []
+    for entry in chat_history:
+        history_list.append({
+            'sender': entry[5],
+            'content': entry[4]
+        })
+
+    return history_list
+
+
+@socketio.on("new_message")
+def handle_new_message(message):
+    global receiver_global
+    print(f"New message: {message}")
+    username = None
+    for user in users:
+        if users[user] == request.sid:
+            username = user
+
+    cursor.execute('SELECT * FROM student WHERE email = %s', username)
+    result = cursor.fetchone()
+    if result:
+        student_id = result[0]
+    else:
+        cursor.execute('SELECT * FROM teacher WHERE email = %s', username)
+        teacher_id = cursor.fetchone()[0]
+
+    cursor.execute('SELECT * FROM teacher WHERE email = %s', receiver_global)
+    result = cursor.fetchone()
+    if result:
+        teacher_id = result[0]
+    else:
+        cursor.execute('SELECT * FROM student WHERE email = %s', receiver_global)
+        student_id = cursor.fetchone()[0]
+
+    insert_query = "INSERT INTO chat (student_id, teacher_id, time_stamp, content, sender, receiver) VALUES (%s, %s, %s, %s, %s, %s)"
+    values = (student_id, teacher_id, datetime.now().time(), message, username, receiver_global)
+    cursor.execute(insert_query, values)
+    conn.commit()
+
+    emit("chat", {"message": message, "username": username}, room=request.sid)
+    emit("chat", {"message": message, "username": username}, room=users[receiver_global])
+
+
 if __name__ == '__main__':
-	app.run(debug=True)
+    socketio.init_app(app)
+    socketio.run(app)
