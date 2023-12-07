@@ -18,65 +18,64 @@ app.config['MYSQL_DATABASE_DB'] = 'skillshare'
 app.config['MYSQL_DATABASE_HOST'] = 'localhost'
 mysql.init_app(app)
 conn = mysql.connect()
-cursor =conn.cursor()
+cursor = conn.cursor()
 socketio = SocketIO()
 
 
 @app.route('/')
 def index():
-	data=cursor.fetchall()
-	print(data)
-	return 'Hello, Flask!'
+    data = cursor.fetchall()
+    print(data)
+    return 'Hello, Flask!'
 
 
 def generate_password_hash(password):
     pw_hash = bcrypt.generate_password_hash(password)
     return pw_hash
 
-def check_if_email_exists(email,role):
+
+def check_if_email_exists(email, role):
     if role:
-        cursor.execute('SELECT COUNT(*) FROM student WHERE email = %s', (email))
-        count = cursor.fetchone()[0]
+        cursor.callproc("GetStudentCountByEmail", [email])
     else:
-        cursor.execute('SELECT COUNT(*) FROM teacher WHERE email = %s', (email))
-        count = cursor.fetchone()[0]
+        cursor.callproc("GetTeacherCountByEmail", [email])
+    count = cursor.fetchall()[0][0]
     return count > 0
 
-def insert_user(name, email, password_hash,role):
-    if role:
-        cursor.execute('INSERT INTO student (name, email, password) VALUES (%s, %s, %s)',
-                   (name, email, password_hash))
-        conn.commit()
-    else:
-                cursor.execute('INSERT INTO teacher (name, email, password) VALUES (%s, %s, %s)',
-                   (name, email, password_hash))
-                conn.commit()
 
-def get_user_by_email(email,role):
+def insert_user(name, email, password_hash, role):
     if role:
-        cursor.execute('SELECT * FROM student WHERE email = %s', (email))
-        user = cursor.fetchone()
+        cursor.callproc("InsertStudent", [name, email, password_hash])
     else:
-        cursor.execute('SELECT * FROM teacher WHERE email = %s', (email))
-        user = cursor.fetchone()
-    # print("fetched student",student)
+        cursor.callproc("InsertTeacher", [name, email, password_hash])
+    conn.commit()
+
+
+def get_user_by_email(email, role):
+    if role:
+        cursor.callproc("GetStudentByEmail", [email])
+    else:
+        cursor.callproc("GetTeacherByEmail", [email])
+    user = cursor.fetchone()
     return user
 
+
 def check_password_hash(password, password_hash):
-    return bcrypt.check_password_hash(password_hash,password)
+    return bcrypt.check_password_hash(password_hash, password)
 
 
-def create_account(name, email, password,role):
+def create_account(name, email, password, role):
     hashed_password = generate_password_hash(password)
 
-    email_exists = check_if_email_exists(email,role)
+    email_exists = check_if_email_exists(email, role)
     if email_exists:
         raise ValueError('Email already exists')
 
-    insert_user(name, email, hashed_password,role )
+    insert_user(name, email, hashed_password, role)
 
-def validate_login(email, password,role):
-    user = get_user_by_email(email,role)
+
+def validate_login(email, password, role):
+    user = get_user_by_email(email, role)
     if not user:
         return None
 
@@ -90,11 +89,12 @@ def validate_login(email, password,role):
             'email': user[3],
         }
     else:
-         return {
+        return {
             'teacher_id': user[0],
             'name': user[1],
             'email': user[3],
         }
+
 
 @app.route('/user/signup', methods=['POST'])
 def signup_student():
@@ -104,26 +104,19 @@ def signup_student():
     password = signup_data['password']
     role = signup_data['role']
 
-    create_account(name, email, password,role)
+    create_account(name, email, password, role)
 
     return jsonify({'message': 'Signup successful'})
 
 
-
 def get_categories():
-    # Connect to the database
-
-    # Execute query to retrieve all categories
-    cursor.execute('SELECT * FROM category')
+    cursor.callproc("GetAllCategories")
     categories = cursor.fetchall()
 
-    # Close the database connection
-
-    # Convert database records to Python objects
     category_list = []
     if categories:
         for category in categories:
-            print('this is cat',category)
+            print('this is cat', category)
             category_obj = {
                 'cat_id': category[0],
                 'name': category[1],
@@ -133,16 +126,11 @@ def get_categories():
 
     return category_list
 
-def get_subcategories_by_category_id(category_id):
-    # Connect to the database
 
-    # Execute query to retrieve subcategories for the specified category
-    cursor.execute('SELECT * FROM subcategory WHERE cat_id = %s', (category_id,))
+def get_subcategories_by_category_id(category_id):
+    cursor.callproc("GetSubcategoriesByCategoryId", [category_id])
     subcategories = cursor.fetchall()
 
-    # Close the database connection
-
-    # Convert database records to Python objects
     subcategory_list = []
     for subcategory in subcategories:
         subcategory_obj = {
@@ -153,43 +141,36 @@ def get_subcategories_by_category_id(category_id):
 
     return subcategory_list
 
+
 def insert_category_record(name, description):
-
-
     # Check if category name already exists
-    cursor.execute('SELECT COUNT(*) FROM category WHERE name = %s', (name,))
-    category_exists = cursor.fetchone()[0] > 0
+    cursor.callproc("CheckCategoryExistsByName", [name])
+    category_exists = cursor.fetchall()[0][0]
 
     # Validate category data
     if category_exists:
         raise ValueError('Category name already exists')
 
     # Insert new category record into database
-    cursor.execute('INSERT INTO category (name, description) VALUES (%s, %s)', (name, description))
+    cursor.callproc("InsertCategory", [name, description])
     conn.commit()
 
-    # Close the database connection
 
 def insert_subcategory_record(cat_id, name):
-    # Connect to the database
-
     # Check if subcategory name already exists for the specified category
-    cursor.execute('SELECT COUNT(*) FROM subcategory WHERE cat_id = %s AND name = %s', (cat_id, name))
-    subcategory_exists = cursor.fetchone()[0] > 0
+    cursor.callproc("CheckSubcategoryExists", [cat_id, name])
+    subcategory_exists = cursor.fetchall()[0][0]
 
     # Validate subcategory data
     if subcategory_exists:
         raise ValueError('Subcategory name already exists in this category')
 
     # Insert new subcategory record into database
-    cursor.execute('INSERT INTO subcategory (cat_id, name) VALUES (%s, %s)', (cat_id, name))
+    cursor.callproc("InsertSubcategory", [cat_id, name])
     conn.commit()
 
-    # Close the database connection
 
 def insert_course_record(subcat_id, price, description, content, ratings, number_of_lessons, teacher_id):
-    # Connect to the database
-
     # Validate course data
     if price < 0:
         raise ValueError('Course price cannot be negative')
@@ -199,93 +180,51 @@ def insert_course_record(subcat_id, price, description, content, ratings, number
         raise ValueError('Course must have at least one lesson')
 
     # Insert new course record into database
-    cursor.execute('INSERT INTO course (subcat_id, price, description, content, ratings, number_of_lessons, teacher_id) VALUES (%s, %s, %s, %s, %s, %s, %s)',
-                   (subcat_id, price, description, content, ratings, number_of_lessons, teacher_id))
+    cursor.callproc("InsertCourse", [subcat_id, price, description, content, ratings, number_of_lessons, teacher_id])
     conn.commit()
 
-    # Close the database connection
 
 def get_course_by_id(course_id):
-    # Connect to the database
-
-    cursor.execute('SELECT * FROM course WHERE cid = %s', (course_id,))
+    cursor.callproc("GetCourseById", [course_id])
     course = cursor.fetchone()
-
     return course
 
+
 def is_valid_course_id(course_id):
-    # Connect to the database
-
-    # Check if course ID exists in the database
-    cursor.execute('SELECT COUNT(*) FROM course WHERE cid = %s', (course_id,))
-    course_exists = cursor.fetchone()[0] > 0
-
-    # Close the database connection
-
+    cursor.callproc("CheckCourseExistsById", [course_id])
+    course_exists = cursor.fetchone()[0]
     return course_exists
 
+
 def is_student_enrolled(student_id, course_id):
-    # Connect to the database
-
-    # Check if student is enrolled in the course
-    cursor.execute('SELECT COUNT(*) FROM enrollment WHERE student_id = %s AND course_id = %s', (student_id, course_id))
-    enrolled = cursor.fetchone()[0] > 0
-
-
+    cursor.callproc("CheckEnrollmentStatus", [student_id, course_id])
+    enrolled = cursor.fetchone()[0]
     return enrolled
 
-def enroll_student_in_course(student_id, course_id):
-    # Connect to the database
 
-    # Insert a new enrollment record
-    cursor.execute('INSERT INTO enrollment (student_id, course_id, date_of_enrollment) VALUES (%s, %s, CURRENT_DATE)', (student_id, course_id))
+def enroll_student_in_course(student_id, course_id):
+    cursor.callproc("EnrollStudentInCourse", [student_id, course_id])
     conn.commit()
 
-    # Close the database connection
 
 def is_in_wishlist(student_id, course_id):
-    # Connect to the database
-
-    # Check if item exists in wishlist
-    cursor.execute('SELECT COUNT(*) FROM wishlist WHERE sid = %s AND cid = %s', (student_id, course_id))
-    in_wishlist = cursor.fetchone()[0] > 0
-
-    # Close the database connection
-
+    cursor.callproc("CheckCourseInWishlist", [student_id, course_id])
+    in_wishlist = cursor.fetchone()[0]
     return in_wishlist
 
+
 def remove_from_wishlist_item(student_id, course_id):
-    # Connect to the database
+    cursor.callproc("RemoveCourseFromWishlist", [student_id, course_id])
 
-    # Remove item from wishlist
-    cursor.execute('DELETE FROM wishlist WHERE sid = %s AND cid = %s', (student_id, course_id))
-
-    # Close the database connection
 
 def is_in_cart(student_id, course_id):
-    # Connect to the database
-
-
-
-    # Check if item exists in cart
-    cursor.execute('SELECT COUNT(*) FROM cart WHERE sid = %s AND cid = %s', (student_id, course_id))
-    in_cart = cursor.fetchone()[0] > 0
-
-    # Close the database connection
-
-
+    cursor.callproc("CheckCourseInCart", [student_id, course_id])
+    in_cart = cursor.fetchone()[0]
     return in_cart
 
+
 def add_to_cart_item(student_id, course_id):
-    # Connect to the database
-
-
-    # Add item to cart
-    cursor.execute('INSERT INTO cart (sid, cid) VALUES (%s, %s)', (student_id, course_id))
-
-
-    # Close the database connection
-
+    cursor.callproc("AddCourseToCart", [student_id, course_id])
 
 
 @app.route('/user/login', methods=['POST'])
@@ -294,25 +233,27 @@ def login_student():
     email = login_data['email']
     password = login_data['password']
     role = login_data['role']
-    user_info = validate_login(email, password,role)
+    user_info = validate_login(email, password, role)
 
     if user_info:
         return jsonify({'message': 'Login successful', 'user': user_info})
     else:
         return jsonify({'error': 'Invalid login credentials'})
 
+
 @app.route('/categories', methods=['GET'])
 def get_all_categories():
-    # Fetch all categories from the database
     categories = get_categories()
 
     return jsonify({'categories': categories})
+
 
 @app.route('/categories/<category_id>/subcategories', methods=['GET'])
 def get_subcategories_by_category(category_id):
     subcategories = get_subcategories_by_category_id(category_id)
 
     return jsonify({'subcategories': subcategories})
+
 
 @app.route('/category', methods=['POST'])
 def insert_category():
@@ -325,10 +266,11 @@ def insert_category():
 
     return jsonify({'message': 'Category inserted successfully'})
 
+
 @app.route('/subcategory', methods=['POST'])
 def insert_subcategory():
     subcategory_data = request.get_json()
-    print('sub',subcategory_data)
+    print('sub', subcategory_data)
     cat_id = subcategory_data['cat_id']
     name = subcategory_data['name']
 
@@ -354,6 +296,7 @@ def insert_course():
 
     return jsonify({'message': 'Course inserted successfully'})
 
+
 @app.route('/courses/<course_id>', methods=['GET'])
 def get_course(course_id):
     course = get_course_by_id(course_id)
@@ -363,27 +306,23 @@ def get_course(course_id):
 
     # Convert course record to dictionary
     course_obj = {
-            'cid': course[0],
-            'subcat_id': course[1],
-            'price': course[2],
-            'description': course[3],
-            'content': course[4],
-            'ratings': course[5],
-            'number_of_lessons': course[6],
-            'student_id': course[7]
+        'cid': course[0],
+        'subcat_id': course[1],
+        'price': course[2],
+        'description': course[3],
+        'content': course[4],
+        'ratings': course[5],
+        'number_of_lessons': course[6],
+        'student_id': course[7]
     }
 
     return jsonify(course_obj)
 
+
 @app.route('/courses', methods=['GET'])
 def get_all_courses():
-    # Connect to the database
-
-    # Retrieve all course records from database
-    cursor.execute('SELECT * FROM course')
+    cursor.callproc("GetAllCourses")
     courses = cursor.fetchall()
-
-    # Close the database connection
 
     # Convert course records to dictionaries
     course_list = []
@@ -402,8 +341,8 @@ def get_all_courses():
 
     return jsonify({'courses': course_list})
 
-@app.route('/enrollment', methods=['POST'])
 
+@app.route('/enrollment', methods=['POST'])
 def enroll_student():
     enrollment_data = request.get_json()
     student_id = enrollment_data['student_id']
@@ -425,10 +364,8 @@ def enroll_student():
 
 @app.route('/wishlist/<student_id>', methods=['GET'])
 def get_wishlist(student_id):
-    # Connect to the database
-
     # Retrieve wishlist items for the specified student
-    cursor.execute('SELECT * FROM wishlist WHERE sid = %s', (student_id,))
+    cursor.callproc("GetWishlistItemsByStudentId", [student_id])
     wishlist_items = cursor.fetchall()
 
     # Convert wishlist records to dictionaries
@@ -440,9 +377,8 @@ def get_wishlist(student_id):
         }
         wishlist_list.append(wishlist_obj)
 
-    # Close the database connection
-
     return jsonify({'wishlist': wishlist_list})
+
 
 @app.route('/wishlist', methods=['POST'])
 def add_to_wishlist():
@@ -459,8 +395,7 @@ def add_to_wishlist():
         return jsonify({'message': 'Item is already in wishlist'})
 
     # Add item to wishlist
-    cursor.execute('INSERT INTO cart (sid, cid) VALUES (%s, %s)', (student_id, course_id))
-
+    cursor.callproc("AddCourseToWishlist", [student_id, course_id])
 
     return jsonify({'message': 'Item added to wishlist'})
 
@@ -481,13 +416,10 @@ def remove_from_wishlist(student_id, course_id):
     return jsonify({'message': 'Item removed from wishlist'})
 
 
-
 @app.route('/cart/<student_id>', methods=['GET'])
 def get_cart(student_id):
-    # Connect to the database
-
     # Retrieve cart items for the specified student
-    cursor.execute('SELECT * FROM cart WHERE sid = %s', (student_id,))
+    cursor.callproc("GetCartItemsByStudentId", [student_id])
     cart_items = cursor.fetchall()
 
     # Convert cart records to dictionaries
@@ -499,14 +431,13 @@ def get_cart(student_id):
         }
         cart_list.append(cart_obj)
 
-    # Close the database connection
-
     return jsonify({'cart': cart_list})
+
 
 @app.route('/cart', methods=['POST'])
 def add_to_cart():
     cart_data = request.get_json()
-    student_id = current_user.id
+    student_id = cart_data['student_id']
     course_id = cart_data['course_id']
 
     # Check if course ID exists
@@ -522,12 +453,11 @@ def add_to_cart():
 
     return jsonify({'message': 'Item added to cart'})
 
+
 @app.route('/past_enrollments/<student_id>', methods=['GET'])
 def get_past_enrollments(student_id):
-    # Connect to the database
-
     # Retrieve past enrollments for the specified student
-    cursor.execute('SELECT * FROM past_enrollments WHERE sid = %s AND validity < CURRENT_DATE', (student_id,))
+    cursor.callproc("GetPastEnrollmentsByStudentId", [student_id])
     past_enrollments = cursor.fetchall()
 
     # Convert past enrollment records to dictionaries
@@ -553,6 +483,33 @@ users = {}
 receiver_global = ""
 
 
+def get_student_or_teacher_id(username, receiver):
+    # student_id at res[0], teacher_id at res[1]
+    res = []
+    student_id = 0
+    teacher_id = 0
+
+    cursor.callproc("GetStudentByEmail", [username])
+    result = cursor.fetchone()
+    if result:
+        student_id = result[0]
+    else:
+        cursor.callproc("GetTeacherByEmail", [username])
+        teacher_id = cursor.fetchone()[0]
+
+    cursor.callproc("GetTeacherByEmail", [receiver])
+    result = cursor.fetchone()
+    if result:
+        teacher_id = result[0]
+    else:
+        cursor.callproc("GetStudentByEmail", [receiver])
+        student_id = cursor.fetchone()[0]
+
+    res.append(student_id)
+    res.append(teacher_id)
+    return res
+
+
 @socketio.on("connect")
 def handle_connect():
     print("Client connected!")
@@ -563,7 +520,7 @@ def handle_user_join(username):
     print(f"User {username} joined!")
     users[username] = request.sid
 
-    cursor.execute('SELECT distinct receiver FROM chat WHERE sender = %s', username)
+    cursor.callproc("GetDistinctReceiversBySender", [username])
     person_list = cursor.fetchall()
 
     print("Here is the list of person that you chatted before")
@@ -573,25 +530,12 @@ def handle_user_join(username):
     receiver = input("Enter a person to start chatting: ")
     receiver_global = receiver
 
-    cursor.execute('SELECT * FROM student WHERE email = %s', username)
-    result = cursor.fetchone()
-    if result:
-        student_id = result[0]
-    else:
-        cursor.execute('SELECT * FROM teacher WHERE email = %s', username)
-        teacher_id = cursor.fetchone()[0]
+    ids = get_student_or_teacher_id(username, receiver_global)
+    student_id = ids[0]
+    teacher_id = ids[1]
 
-    cursor.execute('SELECT * FROM teacher WHERE email = %s', receiver_global)
-    result = cursor.fetchone()
-    if result:
-        teacher_id = result[0]
-    else:
-        cursor.execute('SELECT * FROM student WHERE email = %s', receiver_global)
-        student_id = cursor.fetchone()[0]
-
-    query = "SELECT * FROM chat WHERE student_id = %s AND teacher_id = %s"
-    cursor.execute(query, (student_id, teacher_id))
-    user_chatted_before = cursor.fetchall()
+    cursor.callproc("CheckChatHistory", [student_id, teacher_id])
+    user_chatted_before = cursor.fetchone()
 
     if user_chatted_before:
         chat_history = get_chat_history(student_id, teacher_id)
@@ -601,8 +545,7 @@ def handle_user_join(username):
 
 def get_chat_history(student_id, teacher_id):
     # Retrieve chat history for the connected user from the database
-    query = "SELECT * FROM chat WHERE student_id = %s AND teacher_id = %s"
-    cursor.execute(query, (student_id, teacher_id))
+    cursor.callproc("GetChatHistory", [student_id, teacher_id])
     chat_history = cursor.fetchall()
 
     # Convert chat history to a list of dictionaries
@@ -625,25 +568,14 @@ def handle_new_message(message):
         if users[user] == request.sid:
             username = user
 
-    cursor.execute('SELECT * FROM student WHERE email = %s', username)
-    result = cursor.fetchone()
-    if result:
-        student_id = result[0]
-    else:
-        cursor.execute('SELECT * FROM teacher WHERE email = %s', username)
-        teacher_id = cursor.fetchone()[0]
+    ids = get_student_or_teacher_id(username, receiver_global)
+    student_id = ids[0]
+    teacher_id = ids[1]
 
-    cursor.execute('SELECT * FROM teacher WHERE email = %s', receiver_global)
-    result = cursor.fetchone()
-    if result:
-        teacher_id = result[0]
-    else:
-        cursor.execute('SELECT * FROM student WHERE email = %s', receiver_global)
-        student_id = cursor.fetchone()[0]
+    print(student_id)
+    print(teacher_id)
 
-    insert_query = "INSERT INTO chat (student_id, teacher_id, time_stamp, content, sender, receiver) VALUES (%s, %s, %s, %s, %s, %s)"
-    values = (student_id, teacher_id, datetime.now().time(), message, username, receiver_global)
-    cursor.execute(insert_query, values)
+    cursor.callproc("InsertChatEntry", [student_id, teacher_id, datetime.now().time(), message, username, receiver_global])
     conn.commit()
 
     emit("chat", {"message": message, "username": username}, room=request.sid)
