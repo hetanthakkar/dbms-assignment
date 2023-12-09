@@ -8,28 +8,33 @@ from flask import jsonify
 from flask_socketio import SocketIO
 from flask import render_template
 from flask_socketio import emit
-
+import json
 app = Flask(__name__)
 mysql = MySQL()
 bcrypt = Bcrypt(app)
 app.config['MYSQL_DATABASE_USER'] = 'root'
-app.config['MYSQL_DATABASE_PASSWORD'] = 'Zlh19980901.'
+app.config['MYSQL_DATABASE_PASSWORD'] = 'root'
 app.config['MYSQL_DATABASE_DB'] = 'skillshare'
 app.config['MYSQL_DATABASE_HOST'] = 'localhost'
 mysql.init_app(app)
 conn = mysql.connect()
 cursor = conn.cursor()
 socketio = SocketIO()
+global global_student
+global global_teacher
+global global_sender
+global global_receiver
 
 
 @app.route('/')
 def index():
-    data = cursor.fetchall()
-    print(data)
+    # data = cursor.fetchall()
+    # print(data)
     return 'Hello, Flask!'
 
 
 def generate_password_hash(password):
+    print("came here")
     pw_hash = bcrypt.generate_password_hash(password)
     return pw_hash
 
@@ -57,21 +62,37 @@ def get_user_by_email(email, role):
     else:
         cursor.callproc("GetTeacherByEmail", [email])
     user = cursor.fetchone()
+    print("user is",user)
+    return user
+
+def get_user_by_id(id, role):
+    if not role:
+        cursor.execute('SELECT * FROM teacher WHERE id = %s', (id))
+    user = cursor.fetchone()
+    print("user is",user)
     return user
 
 
 def check_password_hash(password, password_hash):
     return bcrypt.check_password_hash(password_hash, password)
 
+def is_token_presence(token):
+    cursor.execute('SELECT * FROM student WHERE password = %s', (token))
+    result=cursor.fetchone()
+    if result:
+        return True
+
 
 def create_account(name, email, password, role):
     hashed_password = generate_password_hash(password)
 
+    print("inserted",hashed_password)
     email_exists = check_if_email_exists(email, role)
     if email_exists:
         raise ValueError('Email already exists')
 
     insert_user(name, email, hashed_password, role)
+    return hashed_password
 
 
 def validate_login(email, password, role):
@@ -97,16 +118,53 @@ def validate_login(email, password, role):
 
 
 @app.route('/user/signup', methods=['POST'])
+
 def signup_student():
+    print("kajdnsfjn")
     signup_data = request.get_json()
     name = signup_data['name']
     email = signup_data['email']
     password = signup_data['password']
     role = signup_data['role']
+    print("this is email",email)
+    token=create_account(name, email, password, role)
+    print(token,"this is token")
+    return token
 
-    create_account(name, email, password, role)
 
-    return jsonify({'message': 'Signup successful'})
+@app.route('/get_teacher', methods=['GET'])
+def get_user():
+    try:
+        # Get user ID from request parameters
+        user_id = request.args.get('id')
+        print("user id",user_id)
+        # Connect to MySQL database
+        
+
+        # Execute the query to retrieve user data based on ID
+        cursor.execute('SELECT * FROM teacher WHERE tid = %s', (user_id))
+
+        # Fetch the result
+        user_data = cursor.fetchone()
+
+        if user_data:
+            # Convert the result to a dictionary
+            user = {
+                'id': user_data[0],
+                'username': user_data[1],
+                'email': user_data[3]
+            }
+
+            return jsonify(user)
+        else:
+            return jsonify({'message': 'User not found'}), 404
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        print("ASd")
+        # Close the database connection
 
 
 def get_categories():
@@ -226,6 +284,18 @@ def is_in_cart(student_id, course_id):
 def add_to_cart_item(student_id, course_id):
     cursor.callproc("AddCourseToCart", [student_id, course_id])
 
+@app.route('/user', methods=['POST'])
+def get_info():
+    login_data = request.get_json()
+    email = login_data['email']
+    role = login_data['role']
+    user_info = get_user_by_email(email, role)
+    if user_info:
+        return jsonify({'message': 'Login successful', 'user': user_info})
+    else:
+        return jsonify({'error': 'Invalid login credentials'})
+
+
 
 @app.route('/user/login', methods=['POST'])
 def login_student():
@@ -283,13 +353,8 @@ def insert_subcategory():
 @app.route('/course', methods=['POST'])
 def insert_course():
     course_data = request.get_json()
-    subcat_id = course_data['subcat_id']
-    price = course_data['price']
-    description = course_data['description']
-    content = course_data['content']
-    ratings = course_data['ratings']
-    number_of_lessons = course_data['number_of_lessons']
-    teacher_id = course_data['teacher_id']
+    
+    
 
     # Validate course data and insert into database
     insert_course_record(subcat_id, price, description, content, ratings, number_of_lessons, teacher_id)
@@ -323,7 +388,7 @@ def get_course(course_id):
 def get_all_courses():
     cursor.callproc("GetAllCourses")
     courses = cursor.fetchall()
-
+    print(courses)
     # Convert course records to dictionaries
     course_list = []
     for course in courses:
@@ -335,7 +400,7 @@ def get_all_courses():
             'content': course[4],
             'ratings': course[5],
             'number_of_lessons': course[6],
-            'student_id': course[7]
+            'teacher_id': course[7],
         }
         course_list.append(course_obj)
 
@@ -418,16 +483,17 @@ def remove_from_wishlist(student_id, course_id):
 
 @app.route('/cart/<student_id>', methods=['GET'])
 def get_cart(student_id):
+    print(student_id)
     # Retrieve cart items for the specified student
-    cursor.callproc("GetCartItemsByStudentId", [student_id])
+    cursor.callproc("GetCartItemsByStudentId", [int(student_id)])
     cart_items = cursor.fetchall()
-
+    print("Ccart",cart_items)
     # Convert cart records to dictionaries
     cart_list = []
     for cart_item in cart_items:
         cart_obj = {
-            'sid': cart_item['sid'],
-            'cid': cart_item['cid']
+            'sid': cart_item[0],
+            'cid': cart_item[1]
         }
         cart_list.append(cart_obj)
 
@@ -513,6 +579,7 @@ def get_student_or_teacher_id(username, receiver):
 @socketio.on("connect")
 def handle_connect():
     print("Client connected!")
+    # socketio.emit("conn","Asd")
 
 
 @socketio.on("user_join")
@@ -529,7 +596,7 @@ def handle_user_join(username):
     global receiver_global
     receiver = input("Enter a person to start chatting: ")
     receiver_global = receiver
-
+    print(username,receiver_global,"hey there")
     ids = get_student_or_teacher_id(username, receiver_global)
     student_id = ids[0]
     teacher_id = ids[1]
@@ -559,27 +626,58 @@ def get_chat_history(student_id, teacher_id):
     return history_list
 
 
+@app.route('/get_chat_history', methods=['POST'])
+def get_history( ):
+    enrollment_data = request.get_json()
+    student_id = enrollment_data['student_id']
+    teacher_id = enrollment_data['teacher_id']
+    print(teacher_id,student_id)
+    return get_chat_history(student_id,teacher_id)
+
+
+@socketio.on("set_student")
+def set_student(student):
+    global_student=student
+
+
+@socketio.on("set_teacher")
+def set_teacher(teacher):
+    global_teacher=teacher
+
+@socketio.on("set_sender")
+def set_sender(sender):
+    # global global_sender
+    global_sender = sender
+
+@socketio.on("set_reciever")
+def set_reciever(reciever):
+    # global global_receiver
+    global_receiver = reciever
+
 @socketio.on("new_message")
 def handle_new_message(message):
-    global receiver_global
-    print(f"New message: {message}")
-    username = None
-    for user in users:
-        if users[user] == request.sid:
-            username = user
+    print("Asdkfjn",message)
+    # print(f"New message: {message}")
+    # username = None
+    # for user in users:
+    #     if users[user] == request.sid:
+    #         username = user
 
-    ids = get_student_or_teacher_id(username, receiver_global)
-    student_id = ids[0]
-    teacher_id = ids[1]
+    # ids = get_student_or_teacher_id(username, receiver_global)
+    # student_id = ids[0]
+    # teacher_id = ids[1]
 
-    print(student_id)
-    print(teacher_id)
-
-    cursor.callproc("InsertChatEntry", [student_id, teacher_id, datetime.now().time(), message, username, receiver_global])
+    # print(student_id)
+    # print(teacher_id)
+    # print(message[1], message[2], datetime.now().time(), message[0], message[3], message[4])
+    cursor.callproc("InsertChatEntry", [message[1], message[2], datetime.now().time(), message[0], message[3], message[4]])
     conn.commit()
+    
+    # socketio.emit("asdjknfakjsdnf",{"message": message[0], "username": message[3]}, room=message[1])
+    # socketio.emit("chat",json.dumps({"mylist":"sd"}, separators=(',', ':')))
+    # socketio.emit("chat", "asdf")
+    socketio.emit("chat", json.dumps({"message": message[0], "username": message[3]}, separators=(',', ':')))
 
-    emit("chat", {"message": message, "username": username}, room=request.sid)
-    emit("chat", {"message": message, "username": username}, room=users[receiver_global])
 
 
 if __name__ == '__main__':
